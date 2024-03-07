@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Distance Calculator by Atakan Sarıkoç</title>
+  <style>
+    #dropArea {
+      width: 100%;
+      height: 200px;
+      border: 2px dashed #ccc;
+      text-align: center;
+      padding: 50px 0;
+    }
+
+    #dropArea.highlight {
+      border-color: #007bff;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Distance Calculator by Atakan Sarıkoç</h1>
+  <div id="dropArea" class="highlight">
+    <p>Drag & Drop Excel file here or click to select</p>
+  </div>
+  <div id="output"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.4/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/0.21.1/axios.min.js"></script>
+
+  <script>
+    const dropArea = document.getElementById('dropArea');
+
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      dropArea.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropArea.addEventListener(eventName, highlight, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropArea.addEventListener(eventName, unhighlight, false);
+    });
+
+    function highlight() {
+      dropArea.classList.add('highlight');
+    }
+
+    function unhighlight() {
+      dropArea.classList.remove('highlight');
+    }
+
+    dropArea.addEventListener('drop', handleDrop, false);
+
+    async function handleDrop(event) {
+      const dt = event.dataTransfer;
+      const files = dt.files;
+
+      handleFile(files[0]);
+    }
+
+    async function handleFile(file) {
+      const reader = new FileReader();
+
+      reader.onload = async function (event) {
+        const data = new Uint8Array(event.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        await processData(jsonData);
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+    async function processData(data) {
+      const startCityColumn = 0;
+      const startDistrictColumn = 1;
+      const startNeighborhoodColumn = 2; // Yeni: Başlangıç mahalle sütunu
+      const endCityColumn = 3; // Değişti: Başlangıç şehri sütunu indeksi
+      const endDistrictColumn = 4; // Değişti: Başlangıç ilçesi sütunu indeksi
+      const endNeighborhoodColumn = 5; // Yeni: Bitiş mahalle sütunu
+
+      const headers = data[0];
+      headers.push("Distance");
+
+      for (let i = 1; i < data.length; i++) {
+        const startCity = data[i][startCityColumn];
+        const startDistrict = data[i][startDistrictColumn];
+        const startNeighborhood = data[i][startNeighborhoodColumn]; // Yeni: Başlangıç mahalle bilgisi
+        const endCity = data[i][endCityColumn];
+        const endDistrict = data[i][endDistrictColumn];
+        const endNeighborhood = data[i][endNeighborhoodColumn]; // Yeni: Bitiş mahalle bilgisi
+        const startAddress = startNeighborhood ? `${startCity}, ${startDistrict}, ${startNeighborhood}` : `${startCity}, ${startDistrict}`;
+        const endAddress = endNeighborhood ? `${endCity}, ${endDistrict}, ${endNeighborhood}` : `${endCity}, ${endDistrict}`;
+        const coordinates = await getCoordinates(startAddress, endAddress);
+        if (coordinates.start && coordinates.end) {
+          const distance = await calculateDistance(coordinates.start, coordinates.end);
+          if (distance !== null) {
+            data[i].push(distance.toFixed(2));
+          }
+        } else {
+          data[i].push("Coordinates not found");
+          console.error(`Coordinates not found for ${startAddress} and/or ${endAddress}`);
+        }
+      }
+
+      const updatedSheet = XLSX.utils.aoa_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, updatedSheet, "Updated Data");
+      XLSX.writeFile(wb, "updated_data.xlsx");
+    }
+
+    async function getCoordinates(startAddress, endAddress) {
+      try {
+        const startResponse = await axios.get(`https://nominatim.openstreetmap.org/search.php?q=${encodeURIComponent(startAddress)}&format=json&addressdetails=1&limit=1`);
+        const endResponse = await axios.get(`https://nominatim.openstreetmap.org/search.php?q=${encodeURIComponent(endAddress)}&format=json&addressdetails=1&limit=1`);
+        const startCoordinates = startResponse.data[0]?.lat && startResponse.data[0]?.lon ? [startResponse.data[0].lat, startResponse.data[0].lon] : null;
+        const endCoordinates = endResponse.data[0]?.lat && endResponse.data[0]?.lon ? [endResponse.data[0].lat, endResponse.data[0].lon] : null;
+        return { start: startCoordinates, end: endCoordinates };
+      } catch (error) {
+        console.error(`Error fetching coordinates for ${startAddress} and/or ${endAddress}: ${error}`);
+        return { start: null, end: null };
+      }
+    }
+
+    async function calculateDistance(startCoordinates, endCoordinates) {
+      try {
+        const response = await axios.get(`https://router.project-osrm.org/route/v1/driving/${startCoordinates[1]},${startCoordinates[0]};${endCoordinates[1]},${endCoordinates[0]}?overview=false`);
+        const distance = response.data.routes[0].distance / 1000;
+        return distance;
+      } catch (error) {
+        console.error(`Error fetching route between ${startCoordinates} and ${endCoordinates}: ${error}`);
+        return null;
+      }
+    }
+  </script>
+</body>
+
+</html>
